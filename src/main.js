@@ -1,18 +1,117 @@
 /** @jsx React.DOM */
 (function(React, postal, $) {
+    // We need to tell postal how to get a deferred instance
+    postal.configuration.promise.createDeferred = function() {
+        return new $.Deferred();
+    };
+    // We need to tell postal how to get a "public-facing"/safe promise instance
+    postal.configuration.promise.getPromise = function(dfd) {
+        return dfd.promise();
+    };
+    
+    var dataMixin = {
+        requestData: function() {
+            var self = this;
+            postal.channel(self.props.namespace).request({
+                topic: "read",
+                data: {
+                    id: this.props.id
+                },
+                timeout: this.props.timeout || 2000
+            }).then(function(data) {
+                self.setState(data);
+            });
+        }
+    };
+    
+    var msgMixin = {
+        subscriptions: {},
+        publish: function(topic, data) {
+            postal.publish({
+                channel: this.props.namespace,
+                topic : topic,
+                data : data
+            });
+        },
+        subscribe: function(topic, callback) {
+            if(!this.subscriptions[topic]) {
+                this.subscriptions[topic] = postal.subscribe({
+                    channel: this.props.namespace,
+                    topic: topic,
+                    callback: callback
+                }).withContext(this);
+            }
+        }
+    };
+
+    $.mockjax({
+        url: '/worksheet/2014-05',
+        contentType: "text/json",
+        responseTime: 100,
+        responseText: {
+            period : "May 2014",
+            items  : [
+                { 
+                    description : "Rent",
+                    type        : "expense",
+                    budget      : 1600,
+                    actual      : 1600
+                },
+                {
+                    description : "Salary",
+                    type        : "income",
+                    budget      : 5300,
+                    actual      : 4875
+                },
+                { 
+                    description : "Groceries",
+                    type        : "expense",
+                    budget      : 800,
+                    actual      : 650
+                }
+            ]
+        }
+    });
+    
+    var budgetDataSrc = (function(){
+        var dataSrc = {
+            read: function(data, env) {
+                var url = "/worksheet/" + data.id;
+                $.ajax({
+                    url: url,
+                    dataType: 'json'
+                }).then(function(data) {
+                    env.reply(data);
+                });
+            }
+        };
+        
+        postal.subscribe({
+            channel: "worksheet",
+            topic: "#",
+            callback: function(data, env) {
+                if(dataSrc.hasOwnProperty(env.topic)) {
+                    dataSrc[env.topic](data, env);
+                } else {
+                    throw new Error("No such operation exists on the budget datasource:" + env.topic);
+                }
+            }
+        });
+        
+        return dataSrc;
+    }());
+
     var Item = React.createClass({
+        mixins: [msgMixin],
         onChange : function(e) {
             var $el = $(e.currentTarget);
             var type = $el.parent().hasClass("actual") ? "actual" : "budget";
-            postal.publish({
-                channel: "worksheet",
-                topic: "item.change",
-                data : {
-                    index: this.props.index,
-                    type : type,
-                    val  : Number.parseFloat($el.val())
-                }
-            });
+            var data = {
+                index: this.props.index,
+                type : type,
+                val  : Number.parseFloat($el.val())
+            };
+            this.publish("item.change", data);
         },
         render: function() {
             return  <div className="row budget-item">
@@ -28,18 +127,16 @@
     });
 
     var ItemAdd = React.createClass({
+        mixins: [msgMixin],
         addItem: function(e) {
             e.preventDefault();
-            postal.publish({
-                channel: "worksheet",
-                topic: "item.add",
-                data: {
-                    description : $("#item_desc").val(),
-                    type        : $("#item_type").val(),
-                    budget      : Number.parseFloat($("#item_budget").val()),
-                    actual      : Number.parseFloat($("#item_actual").val())
-                }
-            });
+            var data = {
+                description : $("#item_desc").val(),
+                type        : $("#item_type").val(),
+                budget      : Number.parseFloat($("#item_budget").val()),
+                actual      : Number.parseFloat($("#item_actual").val())
+            };
+            this.publish("item.add", data);
         },
 
         render: function() {
@@ -129,22 +226,23 @@
                 }
             };
         },
+        
+        mixins: [msgMixin, dataMixin],
 
         componentWillMount: function() {
-            postal.subscribe({
-                channel: "worksheet",
-                topic : "item.add",
-                callback: function(d, e) {
-                    this.addNewItem(d);
+            this.requestData();
+            this.subscribe(
+                "item.add",
+                function(data, env) {
+                    this.addNewItem(data);
                 }
-            }).withContext(this);
-            postal.subscribe({
-                channel: "worksheet",
-                topic: "item.change",
-                callback: function(d, e) {
-                    this.updateItem(d.index, d.type, d.val);
+            );
+            this.subscribe(
+                "item.change",
+                function(data, env) {
+                    this.updateItem(data.index, data.type, data.val);
                 }
-            }).withContext(this);
+            );
         },
 
         updateItem: function(index, type, val) {
@@ -159,6 +257,7 @@
         },
 
         render: function() {
+            var ns = this.props.namespace;
             return  <div className="container-fluid">
                         <form>
                         <div className="row">
@@ -175,7 +274,7 @@
                                 </div>
                                 {
                                     this.state.items.map(function(i, idx) {
-                                        return <Item index={idx} description={i.description} budget={i.budget} actual={i.actual} />;
+                                        return <Item index={idx} description={i.description} budget={i.budget} actual={i.actual} namespace={ns} />;
                                     })
                                 }
                                 <ItemAdd />
@@ -189,7 +288,6 @@
                                          income={ this.state.actualIncome() }
                                          expense={ this.state.actualExpense() }
                                          remainder={ this.state.actualRemainder() } />
-                                
                             </div>
                         </div>
                         </form>
@@ -197,37 +295,10 @@
         }
     });
 
-    var may2014 = {
-        period : "May 2014",
-        items  : [
-            { 
-                description : "Rent",
-                type        : "expense",
-                budget      : 1600,
-                actual      : 1600
-            },
-            {
-                description : "Salary",
-                type        : "income",
-                budget      : 5300,
-                actual      : 4875
-            },
-            { 
-                description : "Groceries",
-                type        : "expense",
-                budget      : 800,
-                actual      : 650
-            }
-        ]
-    }
-
-    var worksheet = <Worksheet />;
+    var worksheet = <Worksheet id="2014-05" namespace="worksheet" />;
 
     React.renderComponent(
         worksheet,
         document.body
     );
-
-    worksheet.setState(may2014);
-
 }(React, postal, jQuery));
