@@ -25,7 +25,9 @@
     };
     
     var msgMixin = {
-        subscriptions: {},
+        componentDidMount: function() {
+            this.subscriptions = {};
+        },
         publish: function(topic, data) {
             postal.publish({
                 channel: this.props.namespace,
@@ -93,7 +95,7 @@
                 if(dataSrc.hasOwnProperty(env.topic)) {
                     dataSrc[env.topic](data, env);
                 } else {
-                    throw new Error("No such operation exists on the budget datasource:" + env.topic);
+                    console.log("No such operation exists on the budget datasource:" + env.topic);
                 }
             }
         });
@@ -229,7 +231,7 @@
         
         mixins: [msgMixin, dataMixin],
 
-        componentWillMount: function() {
+        componentDidMount: function() {
             this.requestData();
             this.subscribe(
                 "item.add",
@@ -274,10 +276,10 @@
                                 </div>
                                 {
                                     this.state.items.map(function(i, idx) {
-                                        return <Item index={idx} description={i.description} budget={i.budget} actual={i.actual} namespace={ns} />;
+                                        return <Item key={idx} index={idx} description={i.description} budget={i.budget} actual={i.actual} namespace={ns} />;
                                     })
                                 }
-                                <ItemAdd />
+                                <ItemAdd namespace="worksheet" />
                             </div>
                             <div className="col-xs-10 col-sm-3 col-md-3 col-lg-2">
                                 <Summary type="budget"
